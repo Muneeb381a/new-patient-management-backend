@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install ioredis)",
+      "Bash(node -e \"import\\(''ioredis''\\).then\\(m => console.log\\(''ioredis OK:'', m.default.name\\)\\)\")",
+      "Bash(npm install zod jsonwebtoken)",
+      "Bash(psql --version)",
+      "Bash(node --version)",
+      "Bash(npm list pg)",
+      "Bash(node seed_diseases.mjs)",
+      "Bash(npm install bcrypt)",
+      "Bash(npm uninstall bcrypt)",
+      "Bash(npm install bcryptjs)",
+      "Bash(node --input-type=module:*)",
+      "Bash(node reset_admin_password.mjs)",
+      "Bash(del \"c:\\\\Users\\\\Muneeb\\\\Downloads\\\\new-2026-patient_management_backend-main\\\\reset_admin_password.mjs\")",
+      "Bash(node remove_logs.mjs)",
+      "Bash(npm install @reduxjs/toolkit react-redux)",
+      "Bash(node -e \":*)",
+      "Bash(npm install compression --save)"
+    ]
+  }
+}
