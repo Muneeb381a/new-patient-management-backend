@@ -337,10 +337,13 @@ export const saveCompleteConsultation = async (req, res) => {
     if (Array.isArray(medicines) && medicines.length > 0) {
       const medIds = medicines.map((m) => parseInt(m.medicine_id)).filter((n) => !isNaN(n) && n > 0);
       if (medIds.length !== medicines.length) throw new Error("One or more medicine_ids are invalid (must be positive integers)");
-      const medCheck = await client.query("SELECT id FROM medicines WHERE id = ANY($1::int[])", [medIds]);
-      if (medCheck.rowCount !== medIds.length) {
+      // Deduplicate before existence check — the same medicine may appear multiple times
+      // (different courses/dosages) which would cause rowCount < medIds.length even for valid IDs
+      const uniqueMedIds = [...new Set(medIds)];
+      const medCheck = await client.query("SELECT id FROM medicines WHERE id = ANY($1::int[])", [uniqueMedIds]);
+      if (medCheck.rowCount !== uniqueMedIds.length) {
         const validSet = new Set(medCheck.rows.map((r) => r.id));
-        throw new Error(`Medicine IDs do not exist: ${medIds.filter((id) => !validSet.has(id)).join(", ")}`);
+        throw new Error(`Medicine IDs do not exist: ${uniqueMedIds.filter((id) => !validSet.has(id)).join(", ")}`);
       }
       const vp = medicines.map((_, i) => {
         const b = i * 13;
