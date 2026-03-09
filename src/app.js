@@ -26,7 +26,7 @@ const config = {
   security: {
     cors: {
       allowedOrigins: process.env.ALLOWED_ORIGINS?.split(",") || [
-        "https://clinical-web-app.vercel.app",
+        "https://patient-management-frontend-new.vercel.app",
         "http://localhost:5173"
       ]
     },
