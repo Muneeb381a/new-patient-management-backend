@@ -22,7 +22,11 @@ export const createPatient = async (req, res) => {
       [mobile, mr_no, name, age, gender, weight, height]
     );
 
-    await cacheDelPattern("patients:list:*");
+    await Promise.all([
+      cacheDelPattern("patients:list:*"),
+      cacheDelPattern("patients:search:*"),
+      cacheDelPattern("patients:suggest:*"),
+    ]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
     if (error.code === "23505") {
@@ -105,6 +109,8 @@ export const updatePatient = async (req, res) => {
     }
     await Promise.all([
       cacheDelPattern("patients:list:*"),
+      cacheDelPattern("patients:search:*"),
+      cacheDelPattern("patients:suggest:*"),
       cacheDel(`patients:single:${id}`),
     ]);
     res.json(result.rows[0]);
@@ -128,6 +134,8 @@ export const deletePatient = async (req, res) => {
     }
     await Promise.all([
       cacheDelPattern("patients:list:*"),
+      cacheDelPattern("patients:search:*"),
+      cacheDelPattern("patients:suggest:*"),
       cacheDel(`patients:single:${id}`),
     ]);
     res.json({ message: "Patient deleted successfully" });
@@ -146,7 +154,7 @@ export const searchPatient = async (req, res) => {
     if (!mobile && !name) {
       return res.status(400).json({ success: false, message: "At least one of mobile number or name is required" });
     }
-    if (mobile && !/^\+?\d{10,15}$/.test(mobile)) {
+    if (mobile && !/^\d{7,15}$/.test(mobile)) {
       return res.status(400).json({ success: false, message: "Invalid mobile number format" });
     }
     if (name && !/^[\p{L}\s]{1,50}$/u.test(name)) {
@@ -159,8 +167,19 @@ export const searchPatient = async (req, res) => {
 
     const params = [];
     let query = `SELECT id, mobile, name FROM patients WHERE 1=1`;
-    if (mobile) { params.push(mobile);        query += ` AND mobile = $${params.length}`; }
-    if (name)   { params.push(`%${name}%`);   query += ` AND name ILIKE $${params.length}`; }
+
+    if (mobile) {
+      if (/^\d{10,11}$/.test(mobile)) {
+        // Full number — exact match
+        params.push(mobile);
+        query += ` AND mobile = $${params.length}`;
+      } else {
+        // Partial number — prefix search (e.g. "0300" finds all 0300-xxxxxxx)
+        params.push(`${mobile}%`);
+        query += ` AND mobile LIKE $${params.length}`;
+      }
+    }
+    if (name) { params.push(`%${name}%`); query += ` AND name ILIKE $${params.length}`; }
     query += ` ORDER BY id ASC LIMIT 50`;
 
     const result = await pool.query(query, params);
