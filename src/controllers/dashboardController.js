@@ -58,13 +58,33 @@ export const getDashboardStats = async (req, res) => {
         WHERE visit_date::date >= CURRENT_DATE - INTERVAL '6 months'
         GROUP BY DATE_TRUNC('month', visit_date::date)
         ORDER BY DATE_TRUNC('month', visit_date::date) ASC
+      ),
+
+      top_medicines AS (
+        SELECT m.brand_name AS name, COUNT(*) AS count
+        FROM consultation_medicines cm
+        JOIN medicines m ON cm.medicine_id = m.id
+        GROUP BY m.brand_name
+        ORDER BY count DESC
+        LIMIT 10
+      ),
+
+      top_symptoms AS (
+        SELECT s.name, COUNT(*) AS count
+        FROM consultation_symptoms cs
+        JOIN symptoms s ON cs.symptom_id = s.id
+        GROUP BY s.name
+        ORDER BY count DESC
+        LIMIT 10
       )
 
       SELECT
         (SELECT ROW_TO_JSON(c) FROM counts c)                                          AS counts,
         (SELECT COALESCE(JSON_AGG(r), '[]') FROM recent_patients r)                    AS recent_patients,
         (SELECT COALESCE(JSON_AGG(u ORDER BY u.follow_up_date ASC), '[]') FROM upcoming_followups u) AS upcoming_followups,
-        (SELECT COALESCE(JSON_AGG(m), '[]') FROM monthly_trend m)                      AS monthly_trend
+        (SELECT COALESCE(JSON_AGG(m), '[]') FROM monthly_trend m)                      AS monthly_trend,
+        (SELECT COALESCE(JSON_AGG(tm), '[]') FROM top_medicines tm)                    AS top_medicines,
+        (SELECT COALESCE(JSON_AGG(ts), '[]') FROM top_symptoms ts)                     AS top_symptoms
     `);
 
     const row = result.rows[0];
@@ -73,6 +93,8 @@ export const getDashboardStats = async (req, res) => {
       recent_patients: row.recent_patients || [],
       upcoming_followups: row.upcoming_followups || [],
       monthly_trend: row.monthly_trend || [],
+      top_medicines: row.top_medicines || [],
+      top_symptoms: row.top_symptoms || [],
     };
 
     await cacheSet(cacheKey, response, DASHBOARD_TTL);
