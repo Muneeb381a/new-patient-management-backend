@@ -205,11 +205,81 @@ export const getPrescriptionSuggestions = async (req, res) => {
     );
 
     const row = result.rows[0];
+    let diseases  = row.diseases  || [];
+    let medicines = row.medicines || [];
+    let tests     = row.tests     || [];
+
+    // ── Fallback: disease graph is empty → use historical prescription data ──
+    // This happens when the disease_symptoms/disease_medicines tables have no
+    // seed data yet. History-based fallback queries real past prescriptions.
+    if (medicines.length === 0 && diseases.length === 0) {
+      try {
+        const histResult = await pool.query(
+          `
+          WITH matching_consultations AS (
+            SELECT
+              cs.consultation_id,
+              COUNT(DISTINCT cs.symptom_id)::float / $2  AS symptom_overlap_ratio
+            FROM consultation_symptoms cs
+            WHERE cs.symptom_id = ANY($1::int[])
+            GROUP BY cs.consultation_id
+            HAVING COUNT(DISTINCT cs.symptom_id) >= GREATEST(1, FLOOR($2 * 0.6))
+            ORDER BY symptom_overlap_ratio DESC
+            LIMIT 100
+          ),
+          top_medicines AS (
+            SELECT
+              p.medicine_id,
+              m.brand_name,
+              m.generic_name,
+              m.form,
+              m.strength,
+              m.urdu_name,
+              m.urdu_form,
+              m.urdu_strength,
+              COUNT(*) AS times_prescribed,
+              ROUND(AVG(mc.symptom_overlap_ratio)::numeric, 3) AS score
+            FROM matching_consultations mc
+            JOIN prescriptions p ON p.consultation_id = mc.consultation_id
+            JOIN medicines m ON m.id = p.medicine_id
+            GROUP BY p.medicine_id, m.brand_name, m.generic_name, m.form, m.strength, m.urdu_name, m.urdu_form, m.urdu_strength
+            ORDER BY times_prescribed DESC, score DESC
+            LIMIT 10
+          ),
+          top_tests AS (
+            SELECT
+              ct.test_id,
+              t.test_name,
+              t.test_notes,
+              COUNT(*) AS times_ordered,
+              ROUND(AVG(mc.symptom_overlap_ratio)::numeric, 3) AS score
+            FROM matching_consultations mc
+            JOIN consultation_tests ct ON ct.consultation_id = mc.consultation_id
+            JOIN tests t ON t.id = ct.test_id
+            GROUP BY ct.test_id, t.test_name, t.test_notes
+            ORDER BY times_ordered DESC, score DESC
+            LIMIT 10
+          )
+          SELECT
+            (SELECT COALESCE(JSON_AGG(tm ORDER BY tm.times_prescribed DESC), '[]') FROM top_medicines tm) AS medicines,
+            (SELECT COALESCE(JSON_AGG(tt ORDER BY tt.times_ordered DESC), '[]') FROM top_tests tt) AS tests
+          `,
+          [ids, ids.length]
+        );
+        const hist = histResult.rows[0];
+        medicines = hist.medicines || [];
+        tests     = hist.tests     || [];
+      } catch (histErr) {
+        console.error("History fallback failed:", histErr.message);
+        // non-fatal — return empty arrays
+      }
+    }
+
     const response = {
       symptom_ids: ids,
-      diseases:  row.diseases  || [],
-      medicines: row.medicines || [],
-      tests:     row.tests     || [],
+      diseases,
+      medicines,
+      tests,
     };
 
     // Cache for 5 minutes — same symptoms = same suggestions
