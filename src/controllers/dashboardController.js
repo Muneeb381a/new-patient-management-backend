@@ -62,8 +62,8 @@ export const getDashboardStats = async (req, res) => {
 
       top_medicines AS (
         SELECT m.brand_name AS name, COUNT(*) AS count
-        FROM consultation_medicines cm
-        JOIN medicines m ON cm.medicine_id = m.id
+        FROM prescriptions pr
+        JOIN medicines m ON pr.medicine_id = m.id
         GROUP BY m.brand_name
         ORDER BY count DESC
         LIMIT 10
