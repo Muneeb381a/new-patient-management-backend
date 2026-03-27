@@ -26,7 +26,7 @@ const config = {
   security: {
     cors: {
       allowedOrigins: process.env.ALLOWED_ORIGINS?.split(",") || [
-        "https://patient-management-frontend-new.vercel.app",
+        "https://clinical-web-app.vercel.app",
         "http://localhost:5173"
       ]
     },
@@ -118,7 +118,7 @@ app.get("/health", asyncHandler(async (req, res) => {
     const start = process.hrtime();
     const result = await pool.query("SELECT version(), NOW()");
     const latency = process.hrtime(start);
-    
+
     dbStatus = "connected";
     dbVersion = result.rows[0].version.split(' ')[1];
     dbLatency = Math.round(latency[0] * 1e3 + latency[1] / 1e6);
@@ -160,11 +160,8 @@ import testsRoutes from "./routes/testRoutes.js";
 import examRoutes from "./routes/neuroExamRoutes.js";
 import patientHistoryRoutes from "./routes/patientHistoryRoutes.js";
 import neuroOptionsRoutes from "./routes/neuroOptionsRoutes.js";
-import authRoutes from "./routes/authRoutes.js";
-import suggestionRoutes from "./routes/suggestionRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import { followUpReminderHandler } from "./cron/followUpReminder.js";
-import { requireAuth } from "./middleware/auth.js";
 
 app.get("/ping", async (req, res) => {
   try {
@@ -174,9 +171,6 @@ app.get("/ping", async (req, res) => {
     res.status(500).send("DB connection failed");
   }
 });
-
-// ── Public routes (no auth required) ────────────────────────────────────────
-app.use("/api/auth", authRoutes);
 
 // Cron endpoints protected by CRON_SECRET, not JWT
 app.get("/api/cron/follow-up-reminders", followUpReminderHandler);
@@ -193,23 +187,28 @@ app.get("/api/cron/db-keepalive", async (req, res) => {
   }
 });
 
-// ── Auth guard — all /api routes below require a valid JWT ───────────────────
-app.use("/api", requireAuth);
+// Cache-Control headers for static/semi-static list endpoints
+// Browsers and CDNs cache for 5 min; serve stale for up to 10 min while revalidating
+const cacheHeaders = (maxAge, swr = maxAge * 2) => (req, res, next) => {
+  if (req.method === "GET") {
+    res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`);
+  }
+  next();
+};
 
-// ── Protected routes ─────────────────────────────────────────────────────────
+// ── Routes ─────────────────────────────────────────────────────────────────
 app.use("/api/patients", patientRoutes);
 app.use("/api/consultations", consultationRoutes);
-app.use("/api/medicines", medicineRoutes);
+app.use("/api/medicines", cacheHeaders(300), medicineRoutes);
 app.use("/api/prescriptions", prescriptionRoutes);
 app.use("/api/conditions", conditionRoutes);
 app.use("/api/vitals", vitalRoutes);
 app.use("/api/followups", followupRoutes);
-app.use("/api/symptoms", symptomRoutes);
-app.use("/api/tests", testsRoutes);
+app.use("/api/symptoms", cacheHeaders(300), symptomRoutes);
+app.use("/api/tests", cacheHeaders(300), testsRoutes);
 app.use("/api/examination", examRoutes);
 app.use("/api", patientHistoryRoutes);
-app.use("/api/neuro-options", neuroOptionsRoutes);
-app.use("/api/suggest", suggestionRoutes);
+app.use("/api/neuro-options", cacheHeaders(900), neuroOptionsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 
 // 404 Handler
@@ -249,12 +248,12 @@ app.use((err, req, res, next) => {
 
   res.status(statusCode).json({
     success: false,
-    message: isProduction && statusCode === 500 
-      ? "Internal server error" 
+    message: isProduction && statusCode === 500
+      ? "Internal server error"
       : message,
-    ...(!isProduction && { 
+    ...(!isProduction && {
       errorCode: err.code,
-      details: err.details 
+      details: err.details
     })
   });
 });
