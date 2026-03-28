@@ -111,16 +111,14 @@ app.use(express.urlencoded({
 // Enhanced health check with PostgreSQL
 app.get("/health", asyncHandler(async (req, res) => {
   let dbStatus = "disconnected";
-  let dbVersion = "unknown";
   let dbLatency = 0;
 
   try {
     const start = process.hrtime();
-    const result = await pool.query("SELECT version(), NOW()");
+    await pool.query("SELECT 1");
     const latency = process.hrtime(start);
 
     dbStatus = "connected";
-    dbVersion = result.rows[0].version.split(' ')[1];
     dbLatency = Math.round(latency[0] * 1e3 + latency[1] / 1e6);
   } catch (error) {
     logger.error("Database health check failed", { error: error.message });
@@ -130,7 +128,6 @@ app.get("/health", asyncHandler(async (req, res) => {
     status: dbStatus,
     database: {
       type: "PostgreSQL",
-      version: dbVersion,
       latency: `${dbLatency}ms`
     },
     uptime: process.uptime(),

@@ -277,6 +277,7 @@ export const getPrescriptionSuggestions = async (req, res) => {
 
     const response = {
       symptom_ids: ids,
+      source: (diseases.length > 0 || medicines.length > 0) ? "ai" : "historical",
       diseases,
       medicines,
       tests,

@@ -35,14 +35,20 @@ pool.on("error", (err) => {
 export const ensureIndexes = async () => {
   const indexes = [
     `CREATE INDEX IF NOT EXISTS idx_consultations_patient_id ON consultations(patient_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_consultations_visit_date ON consultations(visit_date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_consultations_patient_visit ON consultations(patient_id, visit_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_vital_signs_consultation_id ON vital_signs(consultation_id)`,
     `CREATE INDEX IF NOT EXISTS idx_vital_signs_patient_id ON vital_signs(patient_id)`,
     `CREATE INDEX IF NOT EXISTS idx_prescriptions_consultation_id ON prescriptions(consultation_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_prescriptions_medicine_id ON prescriptions(medicine_id)`,
     `CREATE INDEX IF NOT EXISTS idx_consultation_symptoms_consultation_id ON consultation_symptoms(consultation_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_consultation_symptoms_symptom_id ON consultation_symptoms(symptom_id)`,
     `CREATE INDEX IF NOT EXISTS idx_consultation_tests_consultation_id ON consultation_tests(consultation_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_consultation_tests_test_id ON consultation_tests(test_id)`,
     `CREATE INDEX IF NOT EXISTS idx_neurological_exams_consultation_id ON neurological_exams(consultation_id)`,
     `CREATE INDEX IF NOT EXISTS idx_follow_ups_consultation_id ON follow_ups(consultation_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_consultations_visit_date ON consultations(visit_date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_follow_ups_date ON follow_ups(follow_up_date)`,
+    `CREATE INDEX IF NOT EXISTS idx_symptoms_name ON symptoms(name text_pattern_ops)`,
   ];
   for (const sql of indexes) {
     try {

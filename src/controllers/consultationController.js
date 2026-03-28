@@ -292,6 +292,46 @@ export const saveCompleteConsultation = async (req, res) => {
     return res.status(400).json({ error: "patient_id is required and must be a number" });
   }
 
+  // Validate medicines and tests BEFORE opening the transaction so we don't
+  // hold a DB connection while doing existence checks. Run both in parallel.
+  let validatedTestRows = [];
+  const preChecks = [];
+
+  if (Array.isArray(medicines) && medicines.length > 0) {
+    const medIds = medicines.map((m) => parseInt(m.medicine_id)).filter((n) => !isNaN(n) && n > 0);
+    if (medIds.length !== medicines.length) {
+      return res.status(400).json({ error: "Bad Request", details: "One or more medicine_ids are invalid (must be positive integers)" });
+    }
+    const uniqueMedIds = [...new Set(medIds)];
+    preChecks.push(
+      pool.query("SELECT id FROM medicines WHERE id = ANY($1::int[])", [uniqueMedIds]).then((r) => {
+        if (r.rowCount !== uniqueMedIds.length) {
+          const validSet = new Set(r.rows.map((row) => row.id));
+          throw Object.assign(new Error(`Medicine IDs do not exist: ${uniqueMedIds.filter((id) => !validSet.has(id)).join(", ")}`), { status: 400 });
+        }
+      })
+    );
+  }
+
+  const parsedTestIds = Array.isArray(test_ids) ? test_ids.map(Number).filter((n) => !isNaN(n)) : [];
+  if (parsedTestIds.length > 0) {
+    preChecks.push(
+      pool.query("SELECT id, test_name FROM tests WHERE id = ANY($1::int[])", [parsedTestIds]).then((r) => {
+        if (r.rowCount !== parsedTestIds.length) {
+          const validSet = new Set(r.rows.map((row) => row.id));
+          throw Object.assign(new Error(`Test IDs do not exist: ${parsedTestIds.filter((id) => !validSet.has(id)).join(", ")}`), { status: 400 });
+        }
+        validatedTestRows = r.rows;
+      })
+    );
+  }
+
+  try {
+    await Promise.all(preChecks);
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: "Bad Request", details: err.message });
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -332,19 +372,10 @@ export const saveCompleteConsultation = async (req, res) => {
       }
     }
 
-    // 4. Prescriptions (optional)
+    // 4. Prescriptions (optional) — IDs already validated before the transaction
     let savedPrescriptions = [];
     if (Array.isArray(medicines) && medicines.length > 0) {
       const medIds = medicines.map((m) => parseInt(m.medicine_id)).filter((n) => !isNaN(n) && n > 0);
-      if (medIds.length !== medicines.length) throw new Error("One or more medicine_ids are invalid (must be positive integers)");
-      // Deduplicate before existence check — the same medicine may appear multiple times
-      // (different courses/dosages) which would cause rowCount < medIds.length even for valid IDs
-      const uniqueMedIds = [...new Set(medIds)];
-      const medCheck = await client.query("SELECT id FROM medicines WHERE id = ANY($1::int[])", [uniqueMedIds]);
-      if (medCheck.rowCount !== uniqueMedIds.length) {
-        const validSet = new Set(medCheck.rows.map((r) => r.id));
-        throw new Error(`Medicine IDs do not exist: ${uniqueMedIds.filter((id) => !validSet.has(id)).join(", ")}`);
-      }
       const vp = medicines.map((_, i) => {
         const b = i * 13;
         return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10},$${b+11},$${b+12},$${b+13},NOW())`;
@@ -366,22 +397,17 @@ export const saveCompleteConsultation = async (req, res) => {
       savedPrescriptions = pRes.rows;
     }
 
-    // 5. Tests (optional)
+    // 5. Tests (optional) — IDs already validated before the transaction
     let assignedTests = [];
     if (Array.isArray(test_ids) && test_ids.length > 0) {
       const ids = test_ids.map(Number).filter((n) => !isNaN(n));
       if (ids.length > 0) {
-        const testCheck = await client.query("SELECT id, test_name FROM tests WHERE id = ANY($1::int[])", [ids]);
-        if (testCheck.rowCount !== ids.length) {
-          const validSet = new Set(testCheck.rows.map((r) => r.id));
-          throw new Error(`Test IDs do not exist: ${ids.filter((id) => !validSet.has(id)).join(", ")}`);
-        }
         const tph = ids.map((_, i) => `($1, $${i + 2}, NOW())`).join(", ");
         await client.query(
           `INSERT INTO consultation_tests (consultation_id, test_id, assigned_at) VALUES ${tph} ON CONFLICT DO NOTHING`,
           [cId, ...ids]
         );
-        assignedTests = testCheck.rows;
+        assignedTests = validatedTestRows;
       }
     }
 
