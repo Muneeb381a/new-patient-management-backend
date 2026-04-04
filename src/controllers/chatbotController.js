@@ -130,10 +130,13 @@ export const analyzeSymptoms = async (req, res) => {
     res.json({ success: true, cached: false, cacheLevel: null, data });
   } catch (error) {
     logger.error("chatbot analyzeSymptoms error", { message: error.message });
-    if (error.message.includes("GOOGLE_API_KEY")) {
-      return res.status(503).json({ success: false, message: "AI service not configured" });
+    if (!process.env.GOOGLE_API_KEY) {
+      return res.status(503).json({ success: false, message: "AI service not configured: GOOGLE_API_KEY missing" });
     }
-    res.status(500).json({ success: false, message: "Failed to analyze. Please try again." });
+    if (error.message?.startsWith("Gemini API error")) {
+      return res.status(502).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: error.message || "Failed to analyze. Please try again." });
   }
 };
 
