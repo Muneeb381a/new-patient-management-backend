@@ -46,7 +46,10 @@ instructions_urdu→before_meal=کھانے سے پہلے,after_meal=کھانے �
 // ---------------------------------------------------------------------------
 // Gemini API call
 // ---------------------------------------------------------------------------
-const callGemini = async (userMessage) => {
+// Retry with exponential backoff for transient errors (503, 429 rate-per-minute)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const callGemini = async (userMessage, attempt = 1) => {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_API_KEY is not configured");
 
@@ -59,14 +62,31 @@ const callGemini = async (userMessage) => {
       generationConfig: {
         temperature:      0,
         maxOutputTokens:  1024,
-        responseMimeType: "application/json", // forces clean JSON — no fences
+        responseMimeType: "application/json",
       },
     }),
   });
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${body}`);
+    let parsed;
+    try { parsed = JSON.parse(body); } catch { parsed = null; }
+    const status  = res.status;
+    const errMsg  = parsed?.error?.message || body;
+
+    // 429 quota-per-minute → retry up to 2 times with backoff
+    if (status === 429 && attempt <= 2 && errMsg.includes("quota")) {
+      // Only retry per-minute limits, not daily quota exhaustion
+      if (!errMsg.toLowerCase().includes("exceeded your current quota")) {
+        await sleep(attempt * 2000);
+        return callGemini(userMessage, attempt + 1);
+      }
+    }
+
+    // Surface specific Gemini error codes clearly
+    if (status === 429) throw new Error("QUOTA_EXHAUSTED");
+    if (status === 401 || status === 403) throw new Error("INVALID_API_KEY");
+    throw new Error(`Gemini API error ${status}: ${errMsg}`);
   }
 
   const json = await res.json();
@@ -130,13 +150,16 @@ export const analyzeSymptoms = async (req, res) => {
     res.json({ success: true, cached: false, cacheLevel: null, data });
   } catch (error) {
     logger.error("chatbot analyzeSymptoms error", { message: error.message });
-    if (!process.env.GOOGLE_API_KEY) {
-      return res.status(503).json({ success: false, message: "AI service not configured: GOOGLE_API_KEY missing" });
+    if (!process.env.GOOGLE_API_KEY || error.message === "GOOGLE_API_KEY is not configured") {
+      return res.status(503).json({ success: false, message: "AI service not configured. Add GOOGLE_API_KEY to environment variables." });
     }
-    if (error.message?.startsWith("Gemini API error")) {
-      return res.status(502).json({ success: false, message: error.message });
+    if (error.message === "QUOTA_EXHAUSTED") {
+      return res.status(429).json({ success: false, message: "Gemini API daily quota exceeded. Please check your Google AI Studio billing or wait until quota resets (midnight Pacific Time)." });
     }
-    res.status(500).json({ success: false, message: error.message || "Failed to analyze. Please try again." });
+    if (error.message === "INVALID_API_KEY") {
+      return res.status(401).json({ success: false, message: "Invalid Google API key. Check GOOGLE_API_KEY in Vercel environment variables." });
+    }
+    res.status(500).json({ success: false, message: "Failed to analyze. Please try again." });
   }
 };
 
