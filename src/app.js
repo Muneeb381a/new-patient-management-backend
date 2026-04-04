@@ -159,6 +159,7 @@ import patientHistoryRoutes from "./routes/patientHistoryRoutes.js";
 import neuroOptionsRoutes from "./routes/neuroOptionsRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import suggestionRoutes from "./routes/suggestionRoutes.js";
+import chatbotRoutes from "./routes/chatbotRoutes.js";
 import { followUpReminderHandler } from "./cron/followUpReminder.js";
 
 app.get("/ping", async (req, res) => {
@@ -209,6 +210,7 @@ app.use("/api", patientHistoryRoutes);
 app.use("/api/neuro-options", cacheHeaders(900), neuroOptionsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/suggest", suggestionRoutes);
+app.use("/api/chatbot", chatbotRoutes);
 
 // 404 Handler
 app.use((req, res, next) => {

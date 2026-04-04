@@ -150,6 +150,9 @@ export const deletePatient = async (req, res) => {
 export const searchPatient = async (req, res) => {
   try {
     const { mobile, name } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page  || "1",  10));
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || "20", 10)));
+    const offset = (page - 1) * limit;
 
     if (!mobile && !name) {
       return res.status(400).json({ success: false, message: "At least one of mobile number or name is required" });
@@ -161,39 +164,58 @@ export const searchPatient = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid name format" });
     }
 
-    const cacheKey = `patients:search:${mobile || ""}:${name || ""}`;
+    const cacheKey = `patients:search:${mobile || ""}:${name || ""}:p${page}`;
     const cached = await cacheGet(cacheKey);
     if (cached) return res.json(cached);
 
     const params = [];
-    let query = `SELECT id, mobile, name FROM patients WHERE 1=1`;
+    let conditions = [];
 
     if (mobile) {
       if (/^\d{10,11}$/.test(mobile)) {
-        // Full number — exact match
         params.push(mobile);
-        query += ` AND mobile = $${params.length}`;
+        conditions.push(`mobile = $${params.length}`);
       } else {
-        // Partial number — prefix search (e.g. "0300" finds all 0300-xxxxxxx)
         params.push(`${mobile}%`);
-        query += ` AND mobile LIKE $${params.length}`;
+        conditions.push(`mobile LIKE $${params.length}`);
       }
     }
-    if (name) { params.push(`%${name}%`); query += ` AND name ILIKE $${params.length}`; }
-    query += ` ORDER BY id ASC LIMIT 50`;
 
-    const result = await pool.query(query, params);
+    let orderBy = "id ASC";
+    if (name) {
+      params.push(`%${name}%`);
+      conditions.push(`name ILIKE $${params.length}`);
+      // Use trigram similarity for relevance ordering (GIN index makes ILIKE fast)
+      params.push(name);
+      orderBy = `similarity(name, $${params.length}) DESC, name ASC`;
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    // Count query for pagination metadata
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM patients ${where}`,
+      params.slice(0, name ? params.length - 1 : params.length)
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    params.push(limit, offset);
+    const dataResult = await pool.query(
+      `SELECT id, mobile, name FROM patients ${where} ORDER BY ${orderBy} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
 
     let response;
-    if (!result.rows.length) {
-      response = { success: true, exists: false, message: "No patients found" };
+    if (!dataResult.rows.length) {
+      response = { success: true, exists: false, message: "No patients found", pagination: { total: 0, page, limit, pages: 0 } };
     } else {
-      const patients = result.rows.map((p) => ({ ...p, name: p.name?.trim() || "Unknown" }));
+      const patients = dataResult.rows.map((p) => ({ ...p, name: p.name?.trim() || "Unknown" }));
       response = {
         success: true,
         exists: true,
-        data: patients.length === 1 ? patients[0] : patients,
-        message: patients.length > 1 ? "Multiple patients found" : null,
+        data: patients.length === 1 && page === 1 ? patients[0] : patients,
+        message: total > 1 ? `${total} patients found` : null,
+        pagination: { total, page, limit, pages: Math.ceil(total / limit) },
       };
     }
 

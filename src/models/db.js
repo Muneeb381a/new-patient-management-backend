@@ -34,6 +34,23 @@ pool.on("error", (err) => {
 // Ensure performance indexes exist — safe to run every startup (IF NOT EXISTS is a no-op)
 export const ensureIndexes = async () => {
   const indexes = [
+    // Persistent chatbot response cache (30-day TTL, keyword + exact lookup)
+    `CREATE TABLE IF NOT EXISTS chatbot_cache (
+       input_hash   VARCHAR(40) PRIMARY KEY,
+       keyword_hash VARCHAR(40),
+       response     JSONB        NOT NULL,
+       input_sample TEXT,
+       hit_count    INT          DEFAULT 1,
+       created_at   TIMESTAMPTZ  DEFAULT NOW(),
+       expires_at   TIMESTAMPTZ  DEFAULT NOW() + INTERVAL '30 days'
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_chatbot_cache_keyword ON chatbot_cache(keyword_hash)`,
+    `CREATE INDEX IF NOT EXISTS idx_chatbot_cache_expires ON chatbot_cache(expires_at)`,
+    // Enable trigram extension for fast ILIKE / similarity queries on text columns
+    `CREATE EXTENSION IF NOT EXISTS pg_trgm`,
+    // Patient search indexes — critical for 100k+ records
+    `CREATE INDEX IF NOT EXISTS idx_patients_name_trgm ON patients USING GIN (name gin_trgm_ops)`,
+    `CREATE INDEX IF NOT EXISTS idx_patients_mobile ON patients(mobile)`,
     `CREATE INDEX IF NOT EXISTS idx_consultations_patient_id ON consultations(patient_id)`,
     `CREATE INDEX IF NOT EXISTS idx_consultations_visit_date ON consultations(visit_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_consultations_patient_visit ON consultations(patient_id, visit_date DESC)`,
