@@ -469,3 +469,128 @@ export const getHistorySuggestions = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch history suggestions" });
   }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIMILAR CASES ENGINE
+// GET /api/suggest/similar-cases?symptom_ids=1,5,12&limit=5
+//
+// Finds past consultations that share the most symptoms with the current input.
+// Uses Jaccard similarity:  score = |A ∩ B| / |A ∪ B|
+// Returns top N cases with: diagnosis text, all symptoms, full prescription data.
+// This is the "learn from past data" engine — no external AI required.
+// ─────────────────────────────────────────────────────────────────────────────
+export const getSimilarCases = async (req, res) => {
+  try {
+    const raw   = (req.query.symptom_ids || "").split(",").map((x) => parseInt(x.trim(), 10)).filter((n) => !isNaN(n) && n > 0);
+    const limit = Math.min(10, Math.max(1, parseInt(req.query.limit || "5", 10)));
+
+    if (raw.length === 0) {
+      return res.status(400).json({ success: false, message: "symptom_ids is required" });
+    }
+
+    const sortedIds  = [...new Set(raw)].sort((a, b) => a - b);
+    const cacheKey   = `suggest:similar:${sortedIds.join("-")}:${limit}`;
+    const cached     = await cacheGet(cacheKey);
+    if (cached) return res.json({ success: true, cached: true, data: cached });
+
+    // ── Core similarity query ────────────────────────────────────────────
+    // Step 1: overlap — consultations sharing ≥1 input symptom
+    // Step 2: consult_size — total symptoms per candidate consultation
+    // Step 3: scored — Jaccard score, top N
+    // Step 4: enrich each result with diagnosis + symptoms + prescriptions
+    // All via correlated subqueries (efficient: only runs for top-N rows)
+    const { rows } = await pool.query(
+      `WITH
+         overlap AS (
+           SELECT cs.consultation_id,
+                  COUNT(*)::float AS matched
+           FROM   consultation_symptoms cs
+           WHERE  cs.symptom_id = ANY($1::int[])
+           GROUP  BY cs.consultation_id
+         ),
+         consult_size AS (
+           SELECT consultation_id,
+                  COUNT(*)::float AS total
+           FROM   consultation_symptoms
+           WHERE  consultation_id IN (SELECT consultation_id FROM overlap)
+           GROUP  BY consultation_id
+         ),
+         scored AS (
+           SELECT o.consultation_id,
+                  o.matched::int                                           AS matched,
+                  cs.total::int                                           AS consult_total,
+                  $2::int                                                 AS input_total,
+                  ROUND(
+                    (o.matched / (($2)::float + cs.total - o.matched))::numeric, 3
+                  )                                                       AS score
+           FROM   overlap o
+           JOIN   consult_size cs ON cs.consultation_id = o.consultation_id
+           ORDER  BY score DESC, matched DESC
+           LIMIT  $3
+         )
+       SELECT
+         sc.consultation_id,
+         sc.score,
+         sc.matched,
+         sc.consult_total,
+         sc.input_total,
+         c.visit_date,
+         ne.diagnosis,
+         /* All symptoms of this consultation */
+         (SELECT COALESCE(
+            JSON_AGG(JSON_BUILD_OBJECT('id', s.id, 'name', s.name) ORDER BY s.name),
+            '[]'::json
+          )
+          FROM   consultation_symptoms cs2
+          JOIN   symptoms s ON s.id = cs2.symptom_id
+          WHERE  cs2.consultation_id = sc.consultation_id
+         ) AS symptoms,
+         /* Full prescription rows — maps directly to selectedMedicines state */
+         (SELECT COALESCE(
+            JSON_AGG(JSON_BUILD_OBJECT(
+              'medicine_id',       p.medicine_id,
+              'name',              COALESCE(m.brand_name, m.generic_name, 'Unknown'),
+              'generic_name',      COALESCE(m.generic_name, ''),
+              'form',              COALESCE(m.form, 'Tablet'),
+              'strength',          COALESCE(m.strength, ''),
+              'dosage_en',         COALESCE(p.dosage_en,        '1'),
+              'dosage_urdu',       COALESCE(p.dosage_urdu,      'ایک گولی'),
+              'frequency_en',      COALESCE(p.frequency_en,     'morning'),
+              'frequency_urdu',    COALESCE(p.frequency_urdu,   'صبح'),
+              'duration_en',       COALESCE(p.duration_en,      '7_days'),
+              'duration_urdu',     COALESCE(p.duration_urdu,    '1 ہفتہ (7 دن)'),
+              'instructions_en',   COALESCE(p.instructions_en,  'after_meal'),
+              'instructions_urdu', COALESCE(p.instructions_urdu,'کھانے کے بعد')
+            )),
+            '[]'::json
+          )
+          FROM   prescriptions p
+          JOIN   medicines m ON m.id = p.medicine_id
+          WHERE  p.consultation_id = sc.consultation_id
+         ) AS medicines
+       FROM   scored sc
+       JOIN   consultations c ON c.id = sc.consultation_id
+       LEFT   JOIN neurological_exams ne ON ne.consultation_id = sc.consultation_id
+       ORDER  BY sc.score DESC`,
+      [sortedIds, sortedIds.length, limit]
+    );
+
+    const data = rows.map((r) => ({
+      consultation_id: r.consultation_id,
+      score:           parseFloat(r.score),
+      matched:         r.matched,
+      consult_total:   r.consult_total,
+      input_total:     r.input_total,
+      visit_date:      r.visit_date,
+      diagnosis:       r.diagnosis || "",
+      symptoms:        r.symptoms  || [],
+      medicines:       r.medicines || [],
+    }));
+
+    await cacheSet(cacheKey, data, 300); // 5-min cache
+    res.json({ success: true, cached: false, data });
+  } catch (error) {
+    console.error("getSimilarCases error:", error.message);
+    res.status(500).json({ success: false, message: "Failed to fetch similar cases" });
+  }
+};

@@ -5,6 +5,7 @@ import {
   recordFeedback,
   processFeedback,
   getHistorySuggestions,
+  getSimilarCases,
 } from "../controllers/suggestionController.js";
 
 const router = express.Router();
@@ -28,5 +29,9 @@ router.post("/feedback", recordFeedback);
 // Cron / admin: process pending feedback to update frequency counters
 // POST /api/suggest/process-feedback  (requires x-cron-secret header)
 router.post("/process-feedback", processFeedback);
+
+// Similar past cases — Jaccard similarity on consultation_symptoms
+// GET /api/suggest/similar-cases?symptom_ids=1,5,12&limit=5
+router.get("/similar-cases", getSimilarCases);
 
 export default router;
