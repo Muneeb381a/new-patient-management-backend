@@ -10,8 +10,9 @@ import {
 } from "../utils/chatbotCache.js";
 
 const GEMINI_MODELS = [
-  "gemini-2.0-flash-lite",   // primary  — fastest, cheapest
-  "gemini-1.5-flash",        // fallback — separate quota pool
+  "gemini-2.0-flash-lite",   // primary  — fastest, cheapest (1500 RPD free)
+  "gemini-2.0-flash",        // fallback — own quota pool    (1500 RPD free)
+  "gemini-1.5-flash-latest", // last resort                  (1500 RPD free)
 ];
 
 const geminiUrl = (model) =>
