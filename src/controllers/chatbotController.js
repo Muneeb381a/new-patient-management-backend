@@ -125,18 +125,31 @@ const callGemini = async (userMessage) => {
 // Validate + shape the AI response — guarantees required keys always exist
 // ---------------------------------------------------------------------------
 const parseResponse = (raw) => {
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  // Strip markdown fences (```json ... ``` or ``` ... ```)
+  let cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
+  // Some models wrap with extra text before/after the JSON object — extract
+  // the first complete {...} block as a fallback.
+  if (!cleaned.startsWith("{")) {
+    const start = cleaned.indexOf("{");
+    const end   = cleaned.lastIndexOf("}");
+    if (start !== -1 && end !== -1) cleaned = cleaned.slice(start, end + 1);
+  }
+
   let parsed;
   try { parsed = JSON.parse(cleaned); }
-  catch { throw new Error("AI returned invalid JSON"); }
+  catch (e) {
+    logger.error("chatbot: invalid JSON from model", { raw: raw.slice(0, 300) });
+    throw new Error(`AI returned invalid JSON: ${e.message}`);
+  }
 
   return {
-    diagnoses:          Array.isArray(parsed.diagnoses)          ? parsed.diagnoses          : [],
-    symptoms_extracted: Array.isArray(parsed.symptoms_extracted) ? parsed.symptoms_extracted : [],
+    diagnoses:          Array.isArray(parsed.diagnoses)           ? parsed.diagnoses          : [],
+    symptoms_extracted: Array.isArray(parsed.symptoms_extracted)  ? parsed.symptoms_extracted : [],
     diagnosis_text:     typeof parsed.diagnosis_text === "string" ? parsed.diagnosis_text     : "",
-    medicines:          Array.isArray(parsed.medicines)           ? parsed.medicines           : [],
-    tests_recommended:  Array.isArray(parsed.tests_recommended)  ? parsed.tests_recommended  : [],
-    precautions:        Array.isArray(parsed.precautions)        ? parsed.precautions        : [],
+    medicines:          Array.isArray(parsed.medicines)            ? parsed.medicines          : [],
+    tests_recommended:  Array.isArray(parsed.tests_recommended)   ? parsed.tests_recommended  : [],
+    precautions:        Array.isArray(parsed.precautions)         ? parsed.precautions        : [],
   };
 };
 
@@ -187,7 +200,7 @@ export const analyzeSymptoms = async (req, res) => {
     if (error.message === "INVALID_API_KEY") {
       return res.status(401).json({ success: false, message: "Invalid Google API key. Check GOOGLE_API_KEY in Vercel environment variables." });
     }
-    res.status(500).json({ success: false, message: "Failed to analyze. Please try again.", _debug: error.message });
+    res.status(500).json({ success: false, message: "Failed to analyze. Please try again.", _debug: error.message.slice(0, 200) });
   }
 };
 
