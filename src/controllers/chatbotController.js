@@ -89,7 +89,13 @@ const callGeminiModel = async (model, userMessage, attempt = 1) => {
       return callGeminiModel(model, userMessage, attempt + 1);
     }
 
-    if (status === 429)              throw new Error("QUOTA_EXHAUSTED");
+    // 503 high-demand → retry once, then fall back to next model
+    if (status === 503 && attempt <= 1) {
+      await sleep(1500);
+      return callGeminiModel(model, userMessage, attempt + 1);
+    }
+
+    if (status === 429 || status === 503) throw new Error("QUOTA_EXHAUSTED"); // triggers next model
     if (status === 401 || status === 403) throw new Error("INVALID_API_KEY");
     throw new Error(`Gemini API error ${status}: ${errMsg}`);
   }
@@ -194,7 +200,7 @@ export const analyzeSymptoms = async (req, res) => {
       return res.status(503).json({ success: false, message: "AI service not configured. Add GOOGLE_API_KEY to environment variables." });
     }
     if (error.message === "QUOTA_EXHAUSTED") {
-      return res.status(429).json({ success: false, message: "Gemini API daily quota exceeded. Please check your Google AI Studio billing or wait until quota resets (midnight Pacific Time)." });
+      return res.status(429).json({ success: false, message: "AI models are currently overloaded or quota exhausted. Please try again in a few minutes." });
     }
     if (error.message === "INVALID_API_KEY") {
       return res.status(401).json({ success: false, message: "Invalid Google API key. Check GOOGLE_API_KEY in Vercel environment variables." });
