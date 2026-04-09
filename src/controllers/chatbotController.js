@@ -9,8 +9,13 @@ import {
   chatbotCacheStats,
 } from "../utils/chatbotCache.js";
 
-const GEMINI_MODEL   = "gemini-2.0-flash-lite";
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_MODELS = [
+  "gemini-2.0-flash-lite",   // primary  — fastest, cheapest
+  "gemini-1.5-flash",        // fallback — separate quota pool
+];
+
+const geminiUrl = (model) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
 // ---------------------------------------------------------------------------
 // Token-optimized system prompt.
@@ -49,11 +54,14 @@ instructions_urdu→before_meal=کھانے سے پہلے,after_meal=کھانے �
 // Retry with exponential backoff for transient errors (503, 429 rate-per-minute)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const callGemini = async (userMessage, attempt = 1) => {
+// Call one specific Gemini model. Returns text or throws.
+// Throws "QUOTA_EXHAUSTED" only for daily-limit 429s so the caller can try
+// the next model. Per-minute 429s are retried here with backoff.
+const callGeminiModel = async (model, userMessage, attempt = 1) => {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_API_KEY is not configured");
 
-  const res = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+  const res = await fetch(`${geminiUrl(model)}?key=${apiKey}`, {
     method:  "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -71,26 +79,44 @@ const callGemini = async (userMessage, attempt = 1) => {
     const body = await res.text();
     let parsed;
     try { parsed = JSON.parse(body); } catch { parsed = null; }
-    const status  = res.status;
-    const errMsg  = parsed?.error?.message || body;
+    const status = res.status;
+    const errMsg = parsed?.error?.message || body;
 
-    // 429 quota-per-minute → retry up to 2 times with backoff
-    if (status === 429 && attempt <= 2 && errMsg.includes("quota")) {
-      // Only retry per-minute limits, not daily quota exhaustion
-      if (!errMsg.toLowerCase().includes("exceeded your current quota")) {
-        await sleep(attempt * 2000);
-        return callGemini(userMessage, attempt + 1);
-      }
+    // Per-minute rate limit → retry with backoff (up to 2 times)
+    if (status === 429 && attempt <= 2 && !errMsg.toLowerCase().includes("exceeded your current quota")) {
+      await sleep(attempt * 2000);
+      return callGeminiModel(model, userMessage, attempt + 1);
     }
 
-    // Surface specific Gemini error codes clearly
-    if (status === 429) throw new Error("QUOTA_EXHAUSTED");
+    if (status === 429)              throw new Error("QUOTA_EXHAUSTED");
     if (status === 401 || status === 403) throw new Error("INVALID_API_KEY");
     throw new Error(`Gemini API error ${status}: ${errMsg}`);
   }
 
   const json = await res.json();
   return json.candidates?.[0]?.content?.parts?.[0]?.text || "";
+};
+
+// Try each model in order; skip to the next on QUOTA_EXHAUSTED.
+const callGemini = async (userMessage) => {
+  let lastErr;
+  for (const model of GEMINI_MODELS) {
+    try {
+      const text = await callGeminiModel(model, userMessage);
+      if (model !== GEMINI_MODELS[0]) {
+        logger.info(`chatbot: used fallback model ${model}`);
+      }
+      return text;
+    } catch (err) {
+      if (err.message === "QUOTA_EXHAUSTED") {
+        lastErr = err;
+        logger.warn(`chatbot: quota exhausted on ${model}, trying next model`);
+        continue; // try next model
+      }
+      throw err; // INVALID_API_KEY or network error — don't retry
+    }
+  }
+  throw lastErr; // all models quota-exhausted
 };
 
 // ---------------------------------------------------------------------------
