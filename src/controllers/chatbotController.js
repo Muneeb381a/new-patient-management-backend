@@ -185,7 +185,7 @@ export const analyzeSymptoms = async (req, res) => {
     if (error.message === "INVALID_API_KEY") {
       return res.status(401).json({ success: false, message: "Invalid Google API key. Check GOOGLE_API_KEY in Vercel environment variables." });
     }
-    res.status(500).json({ success: false, message: "Failed to analyze. Please try again." });
+    res.status(500).json({ success: false, message: "Failed to analyze. Please try again.", _debug: error.message });
   }
 };
 
